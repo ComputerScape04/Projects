@@ -1,0 +1,12 @@
+########## RESOURCES ###########
+http://tinyurl.com/blog/everything-you-need-to-know-about-url-shorteners///tinyurl.com/blog/everything-you-need-to-know-about-url-shorteners/
+http://stackoverflow.com/questions/4572734/how-does-a-url-shortener-work
+http://en.wikipedia.org/wiki/URL_shortening
+https://blog.codinghorror.com/url-shortening-hashes-in-practice/
+https://stackoverflow.com/questions/7666509/hash-function-for-string
+http://www.cse.yorku.ca/~oz/hash.html
+https://stackoverflow.com/questions/342409/how-do-i-base64-encode-decode-in-c
+https://stackoverflow.com/questions/59692297/designing-a-url-shortening-service-like-tinyurl
+https://github.com/elzoughby/Base64 - Base 64 encoding
+
+

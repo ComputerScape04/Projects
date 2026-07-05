@@ -1,0 +1,23 @@
+- Original Resource: 
+https://blog.lizzie.io/linux-containers-in-500-loc.html
+
+- Understanding Linux Containerization using Namespaces
+
+A. Driver Code:
+- Defining a Child_config struct that defines the configuration for the child process
+
+** Structure of the child_config struct **
+struct child_config { 
+    int argc ;
+    uid_t uid ;
+    int fd ;
+    char* hostname ;
+    char** argv ;
+    char* mount_dir ;
+}
+
+At the start of the program, we pass a few command line arguments to suggest options. Those being,
+    -c /bin/sh ---> To run the shell as the first process of the namespace
+    -m /busybox-img/ ---> To mount a new filesystem for the namespace
+    -u 0 ---> inside the container, act as root user (userid 0)
+

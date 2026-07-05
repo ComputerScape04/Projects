@@ -1,0 +1,8 @@
+Arena
+Heap
+Chunk
+Memory
+
+Links:
+1. https://danluu.com/malloc-tutorial/
+2. https://gee.cs.oswego.edu/dl/html/malloc.html
