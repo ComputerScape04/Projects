@@ -25,10 +25,11 @@ Then, let it know how much resources it's allowed to use. Then be able to run pr
 		- Namespaces
 		- Capabilities
 		- Cgroups
-		- setrlimit 
+        - Seccomp
 
 # Links 
 
 - [Containers](https://www.infoq.com/articles/build-a-container-golang/)
 - [Container in C](https://blog.lizzie.io/linux-containers-in-500-loc.html) 
+- [RootFS with Busybox](https://www.learningaboutelectronics.com/Articles/How-to-create-a-root-file-system-linux-busybox.php)
 
