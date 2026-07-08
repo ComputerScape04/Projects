@@ -15,15 +15,19 @@
 #include <stdbool.h>
 #include <libgen.h>
 #include <sys/capability.h>
+#include <fcntl.h>
 
 #define STACK_SIZE (1024*1024)
+
+int pipefd[2];
 
 /* Define the configuration of the child process*/
 struct child_config {
     char* hostname; // hostname
-    uid_t uid; // user id
+    //uid_t uid; // user id
     char* init_proc; // first process to run 
     char* mount_dir; // isolated filesystem
+    int pipe_fd; 
 };
 
 int pivot_root(const char* new_root, const char* put_old) {
@@ -46,18 +50,21 @@ int mountfs(struct child_config* config) {
     // 1. MS_PRIVATE: Prevent mount propagation 
     if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) == -1) {
         perror("mount");
+        exit(EXIT_FAILURE);
     }
 
     // 2. Create unique temp dir to act as new "/"
     char mount_dir[] = "/tmp/tmp.XXXXXX";
     if (mkdtemp(mount_dir) == NULL) {
         perror("mkdtemp");
+        exit(EXIT_FAILURE);
     }
     
     // 3. Create a bind mount inside this /
     //    and store the oldroot.XXXXXX
     if (mount(config->mount_dir, mount_dir, NULL, MS_BIND | MS_PRIVATE, NULL) == -1) {
         perror("bind mount"); 
+        exit(EXIT_FAILURE);
     }
 
     // 3.1 Create the oldroot.XXXXXX and we'll use this to pivot root
@@ -65,11 +72,25 @@ int mountfs(struct child_config* config) {
     memcpy(inner_mount_dir, mount_dir, sizeof(mount_dir)-1);
     if (mkdtemp(inner_mount_dir) == NULL) {
         perror("inner mkdtemp");
+        exit(EXIT_FAILURE);
     }
 
     // 4. Pivot root from old root to new root /tmp.XXXXXX
     if (pivot_root(mount_dir, inner_mount_dir) == -1) {
         perror("pivot");
+        exit(EXIT_FAILURE);
+    }
+
+    // 4.1 Mount /proc
+    if (mount("proc", "/proc", "proc", 0, NULL) == -1) {
+       perror("proc mount"); 
+       exit(EXIT_FAILURE);
+    }
+
+    // 4.2 Mount /sysfs
+    if (mount("sys", "/sys", "sysfs", 0, NULL) == -1) {
+       perror("sysfs mount"); 
+       exit(EXIT_FAILURE);
     }
 
     // 5. Unmount old root to make it unaccessible
@@ -92,16 +113,66 @@ int mountfs(struct child_config* config) {
     return 0;
 }
 
+static void write_file(const char* path, const char* data) {
+    int fd = open(path, O_WRONLY);
+    if (fd == -1) {
+        perror("open");
+        exit(EXIT_FAILURE);
+    }
+
+    if (write(fd, data, strlen(data)) == -1) {
+        perror("write");
+        close(fd);
+        exit(EXIT_FAILURE);
+    }
+
+    close(fd);
+}
+
+static void setup_uid_gid_map(pid_t pid, uid_t uid, gid_t gid) {
+
+    char path[128];
+    char data[64]; // map
+
+    // UID Mappings
+    snprintf(path, sizeof(path), "/proc/%d/uid_map", pid);
+    snprintf(data, sizeof(data), "0 %d 1\n", uid);
+    write_file(path, data);
+    
+    // set deny to setgroups
+    snprintf(path, sizeof(path), "/proc/%d/setgroups", pid);
+    write_file(path, "deny");
+
+    // GID Mappings
+    snprintf(path, sizeof(path), "/proc/%d/gid_map", pid);
+    snprintf(data, sizeof(data), "0 %d 1\n", gid);
+    write_file(path, data);
+}
+
 // init proc
 int child(void* arg) {
 
     // setting the capabilities of child proc
     cap_t cap;
     cap = cap_get_proc();
-    printf("Cap: %s\n", cap_to_text(cap, NULL));
+    
+    ssize_t len;
+    char* text = cap_to_text(cap, &len);
+
+    printf("Cap: %s\n", text);
+    cap_free(text);
 
     struct child_config *conf = (struct child_config *)arg;
     char *args[] = {conf->init_proc, 0};
+
+    char c;
+
+    close(pipefd[1]); // child does not write
+
+    if (read(conf->pipe_fd, &c, 1) != 1) {
+        perror("read");
+        exit(EXIT_FAILURE);
+    }
 
     // changing hostname 
     if (sethostname(conf->hostname, sizeof(conf->hostname)) == -1) {
@@ -129,13 +200,17 @@ int main(int argc, char** argv) {
      *
      * linux container via namespaces
      * -- using different clone flags 
-     *  - clone_newpid (process id)
-     *  - clone_newns (mount)
+     *  - clone_newpid (process id) // working
+     *  - clone_newns (mount) // working
      *  - clone_newnet (network stack)
-     *  - clone_newuts (hostname)
+     *  - clone_newuts (hostname) // working
      *  - clone_newuser (elevated permissions in isolation)
      *  - clone_newipc (inter-process communication)
      **/
+
+    cap_t cap;
+    cap = cap_get_proc();
+    printf("Parent Cap: %s\n", cap_to_text(cap, NULL));
 
     struct child_config config;
     
@@ -145,13 +220,13 @@ int main(int argc, char** argv) {
 
     char stack[STACK_SIZE];
 
-    bool has_h, has_m, has_u, has_i;
-    has_h = has_m = has_u = has_i = 0;
+    bool has_h, has_m, has_i;
+    has_h = has_m = has_i = 0;
     
     // handle command line arguments
     // accept hostname, uid and mount directory 
     int opt;
-    while((opt = (char)getopt(argc, argv, "h:m:u:i:")) != -1) {
+    while((opt = (char)getopt(argc, argv, "h:m:i:")) != -1) {
         switch(opt) {
             case 'h':
                 config.hostname = optarg; 
@@ -161,13 +236,13 @@ int main(int argc, char** argv) {
                 config.mount_dir = optarg; 
                 has_m = 1;
                 break;
-            case 'u':
-                if (sscanf(optarg, "%d", &(config.uid)) == -1) {
-                    perror("uid format");
-                    return 1;
-                }
-                has_u = 1;
-                break;
+            //case 'u':
+            //    if (sscanf(optarg, "%d", &(config.uid)) == -1) {
+            //        perror("uid format");
+            //        return 1;
+            //    }
+            //    has_u = 1;
+            //    break;
             case 'i':
                 config.init_proc = optarg;
                 has_i = 1;
@@ -179,15 +254,51 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (!has_h || !has_m || !has_u || !has_i) {
-                fprintf(stderr, "usage: -h <hostname> -m <mount_dir> -u <user_id> -i <init_proc>\n");
+    if (!has_h || !has_m || !has_i) {
+                fprintf(stderr, "usage: -h <hostname> -m <mount_dir> -i <init_proc>\n");
                 exit(0);
     }   
 
     void* args = (void *)&config;
 
+    // pipefd - unidirectional channel b/w parent & child process
+    if (pipe(pipefd) == -1) {
+        perror("pipe");
+        exit(EXIT_FAILURE);
+    }
+
+    config.pipe_fd = pipefd[0];
+
     pid_t t = clone(&child, stack + STACK_SIZE, flags | SIGCHLD, args);
-    
+    printf("Child PID: %d\n", t);
+
+    close(pipefd[0]); // parent doesn't read
+    setup_uid_gid_map(t, getuid(), getgid());
+    write(pipefd[1], "x", 1); // to wake up the child process to read
+    close(pipefd[1]);
+
+    /**
+     *
+     *  Understanding UID/GID Mappings
+     *  We want the root process inside the container to not be the root
+     *  in the host. Thus, we set a mapping between the host and the con
+     *  -tainer. 
+     *
+     *  For this,
+     *  We will create a unidirectional pipeline that allows for comm
+     *  -unication between the host and the container. The child will re
+     *  -ad while the parent will write the map to it.
+     *  
+     *  We will write to the child's (root) uid_map and gid_map. This is
+     *  located inside /proc/pid/uid_map and likewise for gid_map. This
+     *  way, any process now running inside our container will have foll
+     *  -ow the process ID of the container namespace.
+     *
+     *  Also, setting the UID/GID mapping allowed us to mount our minimal
+     *  filesystem
+     *
+     **/
+
     waitpid(t, NULL, 0);
 
     if (errno) {
