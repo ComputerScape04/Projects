@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <dirent.h>
 #include <unistd.h>
+#include <string.h>
 
 int main(int argc, char** argv) {
 
@@ -23,7 +24,7 @@ int main(int argc, char** argv) {
 
     char cwd[128];
     getcwd(cwd, sizeof cwd);
-    printf("%s\n", cwd);
+    //printf("%s\n", cwd);
 
     // open the dir
     DIR* dir = opendir(cwd);
@@ -31,8 +32,12 @@ int main(int argc, char** argv) {
     // read the dir
     struct dirent *dir_entry;
     while((dir_entry = readdir(dir)) != NULL) {
-        printf("%s\n", dir_entry->d_name);
+        if (strcmp(dir_entry->d_name, ".") == 0 || strcmp(dir_entry->d_name, "..") == 0) {
+            continue;
+        }
+        printf("%s  ", dir_entry->d_name);
     }
+    printf("\n");
     
     return 0;
 }
